@@ -8,6 +8,7 @@ import { Button } from '../components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Card, CardHeader, CardContent, CardTitle } from '../components/ui/card'
 import { projectId, publicAnonKey } from '../utils/supabase/info'
+import { salesAPI, userMapping, realUserInfo, dataTransformers, healthCheck } from '../services/apiService'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { Building2, TrendingUp, BarChart3, DollarSign, Calendar, MapPin, RefreshCw, Store, PieChart, Edit, ChevronLeft, ChevronRight, TrendingDown, AlertTriangle, Target, Lightbulb, X, Check } from 'lucide-react'
 
@@ -22,7 +23,28 @@ const debugLog = (message, data) => {
   console.log(`[사장EZ 디버그] ${message}`, data || '')
 }
 
-// localStorage 헬퍼 함수들
+// API 헬퍼 함수들 (localStorage 대체)
+const getSalesFromAPI = async (userId, storeId) => {
+  try {
+    debugLog('API에서 매출 데이터 조회 시도', { userId, storeId })
+    const response = await salesAPI.getSalesByUser(userId)
+    
+    if (response.success) {
+      // 백엔드 데이터를 프론트엔드 형식으로 변환
+      const transformedData = response.data.map(dataTransformers.transformSaleData)
+      debugLog('API 매출 데이터 조회 성공', { count: transformedData.length, data: transformedData })
+      return transformedData
+    } else {
+      debugLog('API 매출 데이터 조회 실패', response.error)
+      return []
+    }
+  } catch (error) {
+    debugLog('API 매출 데이터 조회 오류', error)
+    return []
+  }
+}
+
+// 백업용 localStorage 함수 (API 실패 시 사용)
 const getSalesFromStorage = (userId, storeId) => {
   try {
     const allSalesData = JSON.parse(localStorage.getItem(STORAGE_KEYS.SALES_DATA) || '{}')
@@ -45,12 +67,42 @@ const saveSalesToStorage = (userId, storeId, salesData) => {
   }
 }
 
+const addSaleToAPI = async (userId, storeId, date, amount, storeName, businessType) => {
+  try {
+    // 날짜 문자열 검증 및 정규화
+    const normalizedDate = date.trim()
+    debugLog('API로 매출 데이터 저장 시도', { userId, storeId, originalDate: date, normalizedDate, amount })
+    
+    const saleData = {
+      userId: userId,
+      saleDate: normalizedDate,
+      amount: Number(amount),
+      storeName: storeName,
+      businessType: businessType
+    }
+    
+    const response = await salesAPI.createSale(saleData)
+    
+    if (response.success) {
+      debugLog('API 매출 데이터 저장 성공', response.data)
+      return { success: true, data: response.data }
+    } else {
+      debugLog('API 매출 데이터 저장 실패', response.error)
+      return { success: false, error: response.error }
+    }
+  } catch (error) {
+    debugLog('API 매출 데이터 저장 오류', error)
+    return { success: false, error: error.message }
+  }
+}
+
+// 백업용 localStorage 함수 (API 실패 시 사용)
 const addSaleToStorage = (userId, storeId, date, amount) => {
   const existingSales = getSalesFromStorage(userId, storeId)
   
   // 날짜 문자열 검증 및 정규화
   const normalizedDate = date.trim()
-  debugLog('매출 데이터 저장 시도', { userId, storeId, originalDate: date, normalizedDate, amount })
+  debugLog('localStorage 매출 데이터 저장 시도', { userId, storeId, originalDate: date, normalizedDate, amount })
   
   // 같은 날짜의 기존 데이터가 있으면 업데이트, 없으면 추가
   const existingIndex = existingSales.findIndex(sale => sale.date === normalizedDate)
@@ -67,7 +119,7 @@ const addSaleToStorage = (userId, storeId, date, amount) => {
   existingSales.sort((a, b) => a.date.localeCompare(b.date))
   
   saveSalesToStorage(userId, storeId, existingSales)
-  debugLog('매출 데이터 저장 완료', { date: normalizedDate, amount, totalCount: existingSales.length, allDates: existingSales.map(s => s.date) })
+  debugLog('localStorage 매출 데이터 저장 완료', { date: normalizedDate, amount, totalCount: existingSales.length, allDates: existingSales.map(s => s.date) })
 }
 
 // 매장 추가 모달 컴포넌트
@@ -485,13 +537,27 @@ const SalesInput = ({ user = null, onSalesDataChange = () => {}, selectedStore =
     }
 
     setLoading(true)
-    debugLog('매출 저장 시작 (localStorage)', { date, amount: parseFloat(amount), userId: user.id })
+    debugLog('매출 저장 시작 (API)', { date, amount: parseFloat(amount), userId: user.id })
     
     try {
-      // localStorage에 즉시 저장 - 날짜를 정확히 처리
-      addSaleToStorage(user.id, selectedStore, date, parseFloat(amount))
+      // 현재 선택된 매장 정보 가져오기
+      const currentStore = user.stores.find(store => store.id === selectedStore)
+      const storeName = currentStore ? currentStore.name : '기본 매장'
+      const businessType = currentStore ? currentStore.businessType : '기본 업종'
       
-      setMessage('매출 데이터가 성공적으로 저장되었습니다.')
+      // API로 매출 저장 시도
+      const apiResult = await addSaleToAPI(user.id, selectedStore, date, parseFloat(amount), storeName, businessType)
+      
+      if (apiResult.success) {
+        debugLog('API 매출 저장 성공', apiResult.data)
+        setMessage('매출 데이터가 성공적으로 저장되었습니다.')
+      } else {
+        debugLog('API 매출 저장 실패, localStorage 백업 사용', apiResult.error)
+        // API 실패 시 localStorage 백업
+        addSaleToStorage(user.id, selectedStore, date, parseFloat(amount))
+        setMessage('매출 데이터가 저장되었습니다. (오프라인 모드)')
+      }
+      
       setAmount('')
       
       // 즉시 새로고침 신호 전송
@@ -641,33 +707,47 @@ const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigge
     return `${year}-${month}-${day}`
   }
 
-  // 매출 데이터 로드
+  // 매출 데이터 로드 (API 버전)
   useEffect(() => {
-    if (user) {
-      const userId = user.id
-      const data = getSalesFromStorage(userId, selectedStore)
-      setSalesData(data)
-      
-      // 선택된 날짜의 매출
-      const selectedDateStr = formatDate(selectedDate)
-      const todayData = data.find(sale => sale.date === selectedDateStr)
-      setTodaySales(todayData ? todayData.amount : 0)
-      
-      // 전일 매출
-      const yesterday = new Date(selectedDate)
-      yesterday.setDate(yesterday.getDate() - 1)
-      const yesterdayStr = formatDate(yesterday)
-      const yesterdayData = data.find(sale => sale.date === yesterdayStr)
-      setYesterdaySales(yesterdayData ? yesterdayData.amount : 0)
-      
-      // 전체 매출 총합
-      const total = data.reduce((sum, sale) => sum + sale.amount, 0)
-      setTotalSales(total)
-      
-      // 평균 일매출 계산
-      const average = data.length > 0 ? total / data.length : 0
-      setAverageDailySales(average)
+    const loadSalesData = async () => {
+      if (user) {
+        const userId = user.id
+        debugLog('매출 데이터 로드 시작', { userId, selectedStore })
+        
+        // API에서 데이터 조회, 실패 시 localStorage 백업
+        let data = await getSalesFromAPI(userId, selectedStore)
+        if (data.length === 0) {
+          debugLog('API 데이터가 없어서 localStorage 백업 사용')
+          data = getSalesFromStorage(userId, selectedStore)
+        }
+        
+        setSalesData(data)
+        
+        // 선택된 날짜의 매출
+        const selectedDateStr = formatDate(selectedDate)
+        const todayData = data.find(sale => sale.date === selectedDateStr)
+        setTodaySales(todayData ? todayData.amount : 0)
+        
+        // 전일 매출
+        const yesterday = new Date(selectedDate)
+        yesterday.setDate(yesterday.getDate() - 1)
+        const yesterdayStr = formatDate(yesterday)
+        const yesterdayData = data.find(sale => sale.date === yesterdayStr)
+        setYesterdaySales(yesterdayData ? yesterdayData.amount : 0)
+        
+        // 전체 매출 총합
+        const total = data.reduce((sum, sale) => sum + sale.amount, 0)
+        setTotalSales(total)
+        
+        // 평균 일매출 계산
+        const average = data.length > 0 ? total / data.length : 0
+        setAverageDailySales(average)
+        
+        debugLog('매출 데이터 로드 완료', { dataCount: data.length, total, average })
+      }
     }
+    
+    loadSalesData()
   }, [user, selectedDate, currentMonth, salesRefreshTrigger, selectedStore])
 
   // 달력 생성
@@ -1100,18 +1180,32 @@ const SalesComparison = ({ user = null, selectedStore = 'store1', stores = [], s
     }
   }, [isMounted, isInitialized, comparisonStore])
 
-  // 내 매출 데이터 로드
+  // 내 매출 데이터 로드 (API 버전)
   useEffect(() => {
-    if (user) {
-      const userId = user.id
-      const data = getSalesFromStorage(userId, selectedStore)
-      setSalesData(data)
-      
-      // 내 평균 일매출 계산
-      const total = data.reduce((sum, sale) => sum + sale.amount, 0)
-      const average = data.length > 0 ? total / data.length : 0
-      setMyAverageDailySales(average)
+    const loadMyAverageSales = async () => {
+      if (user) {
+        const userId = user.id
+        debugLog('내 매출 데이터 로드 시작 (비교용)', { userId, selectedStore })
+        
+        // API에서 데이터 조회, 실패 시 localStorage 백업
+        let data = await getSalesFromAPI(userId, selectedStore)
+        if (data.length === 0) {
+          debugLog('API 데이터가 없어서 localStorage 백업 사용 (비교용)')
+          data = getSalesFromStorage(userId, selectedStore)
+        }
+        
+        setSalesData(data)
+        
+        // 내 평균 일매출 계산
+        const total = data.reduce((sum, sale) => sum + sale.amount, 0)
+        const average = data.length > 0 ? total / data.length : 0
+        setMyAverageDailySales(average)
+        
+        debugLog('내 매출 데이터 로드 완료 (비교용)', { dataCount: data.length, total, average })
+      }
     }
+    
+    loadMyAverageSales()
   }, [user, salesRefreshTrigger, selectedStore])
 
   // 업종 변경 시 선택된 지역들의 매출 재계산
@@ -1447,16 +1541,37 @@ export default function Home() {
       debugLog('로그인 시도', email)
       setLoading(true)
       
-      // 실제 Supabase 연동 없이 데모용 로그인
+      // 백엔드 서버 연결 확인
+      const isBackendOnline = await healthCheck()
+      if (!isBackendOnline) {
+        throw new Error('백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.')
+      }
+
+      // 실제 사용자 정보에서 찾기
+      const realUser = Object.values(realUserInfo).find(user => user.email === email)
+      
+      if (!realUser) {
+        throw new Error('등록되지 않은 사용자입니다. 사용 가능한 계정: rlaeogml0724@naver.com, rladlsgy@naver.com, dbswldnjs@naver.com, wjdtndud@naver.com')
+      }
+
+      // 비밀번호 검증 (데모용)
+      if (password !== 'password123') {
+        throw new Error('비밀번호가 일치하지 않습니다. (데모용 비밀번호: password123)')
+      }
+
       await new Promise(resolve => setTimeout(resolve, 1000))
       
-      const mockUser = {
-        id: 'demo-user-' + Date.now(),
-        email: email
+      const userData = {
+        id: realUser.id,
+        email: realUser.email,
+        name: realUser.name,
+        stores: realUser.stores
       }
       
-      setUser(mockUser)
-      debugLog('로그인 성공', mockUser.email)
+      setUser(userData)
+      setStores(realUser.stores)
+      localStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(userData))
+      debugLog('로그인 성공', userData)
       return { success: true }
     } catch (error) {
       debugLog('로그인 처리 오류', error)
