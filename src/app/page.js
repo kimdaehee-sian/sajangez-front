@@ -8,7 +8,7 @@ import { Button } from '../components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Card, CardHeader, CardContent, CardTitle } from '../components/ui/card'
 import { projectId, publicAnonKey } from '../utils/supabase/info'
-import { salesAPI, userMapping, realUserInfo, dataTransformers, healthCheck } from '../services/apiService'
+import { salesAPI, userAPI, userMapping, realUserInfo, dataTransformers, healthCheck } from '../services/apiService'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { Building2, TrendingUp, BarChart3, DollarSign, Calendar, MapPin, RefreshCw, Store, PieChart, Edit, ChevronLeft, ChevronRight, TrendingDown, AlertTriangle, Target, Lightbulb, X, Check } from 'lucide-react'
 
@@ -695,6 +695,7 @@ const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigge
   const [todaySales, setTodaySales] = useState(0)
   const [yesterdaySales, setYesterdaySales] = useState(0)
   const [totalSales, setTotalSales] = useState(0)
+  const [monthlySales, setMonthlySales] = useState(0)
   const [averageDailySales, setAverageDailySales] = useState(0)
   
   const currentStore = stores.find(store => store.id === selectedStore) || { name: '인후네 마라탕' }
@@ -723,21 +724,15 @@ const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigge
         
         setSalesData(data)
         
-        // 선택된 날짜의 매출
-        const selectedDateStr = formatDate(selectedDate)
-        const todayData = data.find(sale => sale.date === selectedDateStr)
-        setTodaySales(todayData ? todayData.amount : 0)
-        
-        // 전일 매출
-        const yesterday = new Date(selectedDate)
-        yesterday.setDate(yesterday.getDate() - 1)
-        const yesterdayStr = formatDate(yesterday)
-        const yesterdayData = data.find(sale => sale.date === yesterdayStr)
-        setYesterdaySales(yesterdayData ? yesterdayData.amount : 0)
-        
         // 전체 매출 총합
         const total = data.reduce((sum, sale) => sum + sale.amount, 0)
         setTotalSales(total)
+        
+        // 현재 월매출 계산
+        const currentMonthStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, '0')}`
+        const monthlyData = data.filter(sale => sale.date.startsWith(currentMonthStr))
+        const monthlyTotal = monthlyData.reduce((sum, sale) => sum + sale.amount, 0)
+        setMonthlySales(monthlyTotal)
         
         // 평균 일매출 계산
         const average = data.length > 0 ? total / data.length : 0
@@ -748,7 +743,30 @@ const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigge
     }
     
     loadSalesData()
-  }, [user, selectedDate, currentMonth, salesRefreshTrigger, selectedStore])
+  }, [user, currentMonth, salesRefreshTrigger, selectedStore])
+
+  // 선택된 날짜가 변경될 때 해당 날짜의 매출 데이터 업데이트
+  useEffect(() => {
+    if (salesData.length > 0) {
+      // 선택된 날짜의 매출
+      const selectedDateStr = formatDate(selectedDate)
+      const todayData = salesData.find(sale => sale.date === selectedDateStr)
+      setTodaySales(todayData ? todayData.amount : 0)
+      
+      // 전일 매출
+      const yesterday = new Date(selectedDate)
+      yesterday.setDate(yesterday.getDate() - 1)
+      const yesterdayStr = formatDate(yesterday)
+      const yesterdayData = salesData.find(sale => sale.date === yesterdayStr)
+      setYesterdaySales(yesterdayData ? yesterdayData.amount : 0)
+      
+      debugLog('선택된 날짜 매출 업데이트', { 
+        selectedDateStr, 
+        todaySales: todayData ? todayData.amount : 0,
+        yesterdaySales: yesterdayData ? yesterdayData.amount : 0 
+      })
+    }
+  }, [selectedDate, salesData])
 
   // 달력 생성
   const generateCalendar = () => {
@@ -926,6 +944,21 @@ const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigge
                    <p className="text-sm text-gray-600">총 매출액</p>
                    <p className="text-2xl font-bold text-gray-900">{totalSales.toLocaleString()}원</p>
                  </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* 월매출 */}
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-6">
+              <div className="flex items-center space-x-4">
+                <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
+                  <BarChart3 className="w-6 h-6 text-orange-600" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600">{currentMonth.getFullYear()}년 {currentMonth.getMonth() + 1}월 매출</p>
+                  <p className="text-2xl font-bold text-gray-900">{monthlySales.toLocaleString()}원</p>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -1254,7 +1287,7 @@ const SalesComparison = ({ user = null, selectedStore = 'store1', stores = [], s
       chartData.push({
         name: district.name,
         sales: district.averageSales,
-        color: '#E5E7EB', // 회색
+        color: '#374151', // 검은색 (gray-700)
         isMyStore: false
       })
     })
@@ -1266,7 +1299,7 @@ const SalesComparison = ({ user = null, selectedStore = 'store1', stores = [], s
         chartData.push({
           name: `${selectedBusinessType} 업종 평균`,
           sales: businessTypeObj.baseSales,
-          color: '#D1D5DB', // 더 옅은 회색
+          color: '#374151', // 검은색 (gray-700)
           isMyStore: false
         })
       }
@@ -1387,9 +1420,13 @@ const SalesComparison = ({ user = null, selectedStore = 'store1', stores = [], s
                   const diff = myAverageDailySales - avgRegionSales
                   const percentage = avgRegionSales > 0 ? Math.abs((diff / avgRegionSales) * 100) : 0
                   
+                  const regionText = selectedDistricts.length === 1 
+                    ? `${selectedDistricts[0].name} 대비` 
+                    : `선택한 ${selectedDistricts.length}개 지역 평균 대비`
+                  
                   return (
                     <p className={`text-sm font-medium ${diff >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                      선택한 지역 대비 내 가게 매출이 {percentage.toFixed(1)}% {diff >= 0 ? '높습니다' : '낮습니다'} ✓
+                      {regionText} 내 가게 매출이 {percentage.toFixed(1)}% {diff >= 0 ? '높습니다' : '낮습니다'} ✓
                     </p>
                   )
                 })()}
@@ -1492,17 +1529,57 @@ export default function Home() {
     handleSalesDataChange()
   }
 
-  const handleAddStore = (storeData) => {
-    const newStore = {
-      id: 'store' + (stores.length + 1),
-      name: storeData.name,
-      businessType: storeData.businessType,
-      address: storeData.address
+  const handleAddStore = async (storeData) => {
+    if (!user) {
+      debugLog('사용자 정보가 없어서 매장 추가 불가')
+      alert('로그인이 필요합니다.')
+      return
     }
 
-    setStores(prev => [...prev, newStore])
-    setSelectedStore(newStore.id)
-    debugLog('새 매장 추가', newStore)
+    try {
+      debugLog('매장 정보 추가 API 호출 시작', { email: user.email, storeData })
+      
+      // 백엔드 API를 통해 사용자의 매장 정보 업데이트
+      const updateResponse = await userAPI.updateUser(user.email, {
+        name: user.name, // 기존 이름 유지
+        storeName: storeData.name,
+        businessType: storeData.businessType,
+        address: storeData.address
+      })
+
+      if (updateResponse.success) {
+        // UI 업데이트
+        const newStore = {
+          id: 'store1', // 현재는 사용자당 하나의 매장만 지원
+          name: storeData.name,
+          businessType: storeData.businessType,
+          address: storeData.address
+        }
+
+        const updatedUser = {
+          ...user,
+          stores: [newStore]
+        }
+
+        setUser(updatedUser)
+        setStores([newStore])
+        setSelectedStore(newStore.id)
+        localStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(updatedUser))
+        
+        debugLog('매장 정보 추가 성공', { newStore, dbResponse: updateResponse.data })
+        alert('매장이 성공적으로 추가되었습니다.')
+        
+        // 매장 추가 후 모달 닫기
+        setIsAddStoreModalOpen(false)
+      } else {
+        debugLog('매장 정보 추가 API 실패', updateResponse.error)
+        alert('매장 추가에 실패했습니다: ' + updateResponse.error)
+        throw new Error(updateResponse.error)
+      }
+    } catch (error) {
+      debugLog('매장 정보 추가 오류', error)
+      alert('매장 추가 중 오류가 발생했습니다: ' + error.message)
+    }
   }
 
   const handleOpenAddStoreModal = () => {
@@ -1513,19 +1590,50 @@ export default function Home() {
     setIsAddStoreModalOpen(false)
   }
 
-  const handleEditStore = (storeData) => {
-    const currentStore = stores.find(store => store.id === selectedStore)
-    if (!currentStore) return
-
-    const updatedStore = {
-      ...currentStore,
-      name: storeData.name,
-      businessType: storeData.businessType,
-      address: storeData.address
+  const handleEditStore = async (storeData) => {
+    if (!user) {
+      debugLog('사용자 정보가 없어서 매장 수정 불가')
+      return
     }
 
-    setStores(prev => prev.map(store => store.id === selectedStore ? updatedStore : store))
-    debugLog('매장 정보 수정', updatedStore)
+    try {
+      debugLog('매장 정보 수정 API 호출 시작', { email: user.email, storeData })
+      
+      // 실제 DB에 사용자 정보 업데이트
+      const updateResponse = await userAPI.updateUser(user.email, {
+        name: user.name, // 기존 이름 유지
+        storeName: storeData.name,
+        businessType: storeData.businessType,
+        address: storeData.address
+      })
+
+      if (updateResponse.success) {
+        // UI 업데이트
+        const updatedStore = {
+          id: 'store1',
+          name: storeData.name,
+          businessType: storeData.businessType,
+          address: storeData.address
+        }
+
+        const updatedUser = {
+          ...user,
+          stores: [updatedStore]
+        }
+
+        setUser(updatedUser)
+        setStores([updatedStore])
+        localStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(updatedUser))
+        
+        debugLog('매장 정보 수정 성공', { updatedStore, dbResponse: updateResponse.data })
+      } else {
+        debugLog('매장 정보 수정 API 실패', updateResponse.error)
+        alert('매장 정보 수정에 실패했습니다: ' + updateResponse.error)
+      }
+    } catch (error) {
+      debugLog('매장 정보 수정 오류', error)
+      alert('매장 정보 수정 중 오류가 발생했습니다: ' + error.message)
+    }
   }
 
   const handleOpenEditStoreModal = () => {
@@ -1547,29 +1655,59 @@ export default function Home() {
         throw new Error('백엔드 서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.')
       }
 
-      // 실제 사용자 정보에서 찾기
-      const realUser = Object.values(realUserInfo).find(user => user.email === email)
-      
-      if (!realUser) {
-        throw new Error('등록되지 않은 사용자입니다. 사용 가능한 계정: rlaeogml0724@naver.com, rladlsgy@naver.com, dbswldnjs@naver.com, wjdtndud@naver.com')
-      }
-
       // 비밀번호 검증 (데모용)
       if (password !== 'password123') {
         throw new Error('비밀번호가 일치하지 않습니다. (데모용 비밀번호: password123)')
       }
 
+      // 실제 DB에서 사용자 정보 조회 (백업 로직 포함)
+      debugLog('DB에서 사용자 정보 조회 시도', { email })
+      let dbUser = null
+      
+      try {
+        const userResponse = await userAPI.getUserInfo(email)
+        
+        if (userResponse.success) {
+          dbUser = userResponse.data
+          debugLog('DB에서 사용자 정보 조회 성공', dbUser)
+        } else {
+          throw new Error('API 응답 실패: ' + userResponse.error)
+        }
+      } catch (error) {
+        debugLog('DB 조회 실패, 하드코딩 정보 사용', error.message)
+        
+        // 백업: 하드코딩된 사용자 정보 사용
+        const fallbackUser = Object.values(realUserInfo).find(user => user.email === email)
+        if (!fallbackUser) {
+          throw new Error('등록되지 않은 사용자입니다. 사용 가능한 계정: rlaeogml0724@naver.com, rladlsgy@naver.com, dbswldnjs@naver.com, wjdtndud@naver.com')
+        }
+        
+        dbUser = {
+          email: fallbackUser.email,
+          name: fallbackUser.name,
+          storeName: fallbackUser.stores[0].name,
+          businessType: fallbackUser.stores[0].businessType,
+          address: fallbackUser.stores[0].address
+        }
+      }
       await new Promise(resolve => setTimeout(resolve, 1000))
       
+      // DB에서 가져온 실제 사용자 정보로 구성
       const userData = {
-        id: realUser.id,
-        email: realUser.email,
-        name: realUser.name,
-        stores: realUser.stores
+        id: dbUser.email,
+        email: dbUser.email,
+        name: dbUser.name,
+        stores: [{
+          id: 'store1',
+          name: dbUser.storeName,
+          businessType: dbUser.businessType,
+          address: dbUser.address
+        }]
       }
       
+      debugLog('DB에서 사용자 정보 로드 성공', userData)
       setUser(userData)
-      setStores(realUser.stores)
+      setStores(userData.stores)
       localStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(userData))
       debugLog('로그인 성공', userData)
       return { success: true }

@@ -154,6 +154,22 @@ export const dataTransformers = {
   }
 };
 
+// 사용자 관련 API 함수들
+export const userAPI = {
+  // 사용자 정보 조회
+  getUserInfo: async (email) => {
+    return await apiCall(`/users/${encodeURIComponent(email)}`);
+  },
+
+  // 사용자 정보 수정
+  updateUser: async (email, userData) => {
+    return await apiCall(`/users/${encodeURIComponent(email)}`, {
+      method: 'PUT',
+      body: JSON.stringify(userData),
+    });
+  },
+};
+
 // 헬스체크 함수 (API 엔드포인트 사용)
 export const healthCheck = async () => {
   try {
