@@ -688,7 +688,7 @@ const SalesInput = ({ user = null, onSalesDataChange = () => {}, selectedStore =
 }
 
 // SalesReport 컴포넌트
-const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigger = 0, stores = [] }) => {
+const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigger = 0, stores = [], setSalesRefreshTrigger, onEditSale, onDeleteSale }) => {
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [salesData, setSalesData] = useState([])
@@ -696,7 +696,14 @@ const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigge
   const [yesterdaySales, setYesterdaySales] = useState(0)
   const [totalSales, setTotalSales] = useState(0)
   const [monthlySales, setMonthlySales] = useState(0)
+  const [monthlyAverageDailySales, setMonthlyAverageDailySales] = useState(0)
   const [averageDailySales, setAverageDailySales] = useState(0)
+  
+  // 매출 수정/삭제 모달 상태
+  const [isEditSaleModalOpen, setIsEditSaleModalOpen] = useState(false)
+  const [selectedSaleData, setSelectedSaleData] = useState(null)
+  const [editAmount, setEditAmount] = useState('')
+  const [isEditLoading, setIsEditLoading] = useState(false)
   
   const currentStore = stores.find(store => store.id === selectedStore) || { name: '인후네 마라탕' }
 
@@ -733,6 +740,10 @@ const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigge
         const monthlyData = data.filter(sale => sale.date.startsWith(currentMonthStr))
         const monthlyTotal = monthlyData.reduce((sum, sale) => sum + sale.amount, 0)
         setMonthlySales(monthlyTotal)
+        
+        // 현재 월 평균 일매출 계산
+        const monthlyAverage = monthlyData.length > 0 ? monthlyTotal / monthlyData.length : 0
+        setMonthlyAverageDailySales(monthlyAverage)
         
         // 평균 일매출 계산
         const average = data.length > 0 ? total / data.length : 0
@@ -812,6 +823,74 @@ const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigge
 
   const changeRate = getChangeRate()
   const isPositive = changeRate >= 0
+
+  // 매출 수정/삭제 핸들러 함수들
+  const handleEditSale = (saleData) => {
+    setSelectedSaleData(saleData)
+    setEditAmount(saleData.amount.toString())
+    setIsEditSaleModalOpen(true)
+  }
+
+  const handleUpdateSale = async (e) => {
+    e.preventDefault()
+    
+    if (!editAmount || parseFloat(editAmount) <= 0) {
+      alert('유효한 매출액을 입력해주세요.')
+      return
+    }
+
+    setIsEditLoading(true)
+    
+    try {
+      const currentStore = stores.find(store => store.id === selectedStore) || { name: '기본매장', businessType: '기타' }
+      const updateData = {
+        userId: user.id,
+        saleDate: selectedSaleData.date,
+        amount: parseFloat(editAmount),
+        storeName: currentStore.name,
+        businessType: currentStore.businessType
+      }
+
+      const response = await salesAPI.updateSale(selectedSaleData.id, user.id, updateData)
+      
+      if (response.success) {
+        debugLog('매출 수정 성공', response.data)
+        alert('매출이 성공적으로 수정되었습니다.')
+        setIsEditSaleModalOpen(false)
+        // 데이터 새로고침
+        setSalesRefreshTrigger(prev => prev + 1)
+      } else {
+        throw new Error(response.error)
+      }
+    } catch (error) {
+      debugLog('매출 수정 실패', error)
+      alert('매출 수정 중 오류가 발생했습니다: ' + error.message)
+    } finally {
+      setIsEditLoading(false)
+    }
+  }
+
+  const handleDeleteSale = async (saleData) => {
+    if (!confirm(`${saleData.date} 매출 ${saleData.amount.toLocaleString()}원을 삭제하시겠습니까?`)) {
+      return
+    }
+
+    try {
+      const response = await salesAPI.deleteSale(saleData.id, user.id)
+      
+      if (response.success) {
+        debugLog('매출 삭제 성공')
+        alert('매출이 성공적으로 삭제되었습니다.')
+        // 데이터 새로고침
+        setSalesRefreshTrigger(prev => prev + 1)
+      } else {
+        throw new Error(response.error)
+      }
+    } catch (error) {
+      debugLog('매출 삭제 실패', error)
+      alert('매출 삭제 중 오류가 발생했습니다: ' + error.message)
+    }
+  }
 
   // 월 이동
   const previousMonth = () => {
@@ -978,6 +1057,21 @@ const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigge
             </CardContent>
           </Card>
 
+          {/* 월 평균 일매출 */}
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-6">
+              <div className="flex items-center space-x-4">
+                <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center">
+                  <BarChart3 className="w-6 h-6 text-indigo-600" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600">{currentMonth.getFullYear()}년 {currentMonth.getMonth() + 1}월 평균 일매출</p>
+                  <p className="text-2xl font-bold text-gray-900">{Math.round(monthlyAverageDailySales).toLocaleString()}원</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* 기록된 일수 */}
           <Card className="border-0 shadow-sm">
             <CardContent className="p-6">
@@ -1074,9 +1168,45 @@ const SalesReport = ({ user = null, selectedStore = 'store1', salesRefreshTrigge
                   </span>
                 </div>
               </div>
-              <div className="text-sm text-gray-500">
-                매출 입력 메뉴에서 데이터를 추가하세요.
-              </div>
+              
+              {/* 매출 수정/삭제 버튼 */}
+              {(() => {
+                const selectedDateStr = formatDate(selectedDate)
+                const saleData = salesData.find(sale => sale.date === selectedDateStr)
+                
+                if (saleData && todaySales > 0) {
+                  return (
+                    <div className="pt-4 border-t border-gray-100">
+                      <div className="flex space-x-2">
+                        <Button
+                          onClick={() => onEditSale(saleData)}
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 text-blue-600 border-blue-200 hover:bg-blue-50"
+                        >
+                          <Edit className="w-4 h-4 mr-1" />
+                          수정
+                        </Button>
+                        <Button
+                          onClick={() => onDeleteSale(saleData)}
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 text-red-600 border-red-200 hover:bg-red-50"
+                        >
+                          <X className="w-4 h-4 mr-1" />
+                          삭제
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                } else {
+                  return (
+                    <div className="text-sm text-gray-500">
+                      매출 입력 메뉴에서 데이터를 추가하세요.
+                    </div>
+                  )
+                }
+              })()}
             </div>
           </CardContent>
         </Card>
@@ -1489,28 +1619,99 @@ const SalesComparison = ({ user = null, selectedStore = 'store1', stores = [], s
   )
 }
 
+// 매출 수정 모달 컴포넌트
+const EditSaleModal = ({ isOpen, onClose, onUpdate, saleData, editAmount, setEditAmount, loading }) => {
+  if (!isOpen) return null
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-900">매출 수정</h3>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600"
+            disabled={loading}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <form onSubmit={onUpdate} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              날짜
+            </label>
+            <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-md text-gray-900">
+              {saleData ? saleData.date : ''}
+            </div>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              매출액 (원)
+            </label>
+            <input
+              type="number"
+              value={editAmount}
+              onChange={(e) => setEditAmount(e.target.value)}
+              placeholder="매출액을 입력하세요"
+              min="0"
+              step="1000"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              disabled={loading}
+              required
+            />
+            {editAmount && parseFloat(editAmount) > 0 && (
+              <p className="text-sm text-blue-600 font-medium mt-1">
+                {new Intl.NumberFormat('ko-KR').format(parseFloat(editAmount))}원
+              </p>
+            )}
+          </div>
+          
+          <div className="flex gap-3 pt-4">
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? '수정 중...' : '수정'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading}
+              className="flex-1 bg-gray-100 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-200 disabled:opacity-50"
+            >
+              취소
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 // 메인 App 컴포넌트
 export default function Home() {
   const [user, setUser] = useState(null)
-  const [userData, setUserData] = useState({
-    name: '김대희',
-    email: ''
-  })
-  const [stores, setStores] = useState([
-    {
-      id: 'store1',
-      name: '인후네 마라탕',
-      businessType: '중식',
-      address: '서울특별시 강남구 테헤란로 129'
-    }
-  ])
+  const [userData, setUserData] = useState(null)
+  const [stores, setStores] = useState([])
   const [selectedStore, setSelectedStore] = useState('store1')
-  const [isLogin, setIsLogin] = useState(true)
-  const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('dashboard')
+  const [loading, setLoading] = useState(false)
   const [salesRefreshTrigger, setSalesRefreshTrigger] = useState(0)
+  const [isLogin, setIsLogin] = useState(true)
+  
+  // 매장 관련 상태
   const [isAddStoreModalOpen, setIsAddStoreModalOpen] = useState(false)
   const [isEditStoreModalOpen, setIsEditStoreModalOpen] = useState(false)
+  
+  // 매출 수정/삭제 모달 상태 (전역으로 이동)
+  const [isEditSaleModalOpen, setIsEditSaleModalOpen] = useState(false)
+  const [selectedSaleData, setSelectedSaleData] = useState(null)
+  const [editAmount, setEditAmount] = useState('')
+  const [isEditLoading, setIsEditLoading] = useState(false)
 
   const handleSalesDataChange = () => {
     const newTrigger = salesRefreshTrigger + 1
@@ -1642,6 +1843,74 @@ export default function Home() {
 
   const handleCloseEditStoreModal = () => {
     setIsEditStoreModalOpen(false)
+  }
+
+  // 매출 수정/삭제 핸들러 함수들
+  const handleEditSale = (saleData) => {
+    setSelectedSaleData(saleData)
+    setEditAmount(saleData.amount.toString())
+    setIsEditSaleModalOpen(true)
+  }
+
+  const handleUpdateSale = async (e) => {
+    e.preventDefault()
+    
+    if (!editAmount || parseFloat(editAmount) <= 0) {
+      alert('유효한 매출액을 입력해주세요.')
+      return
+    }
+
+    setIsEditLoading(true)
+    
+    try {
+      const currentStore = stores.find(store => store.id === selectedStore) || { name: '기본매장', businessType: '기타' }
+      const updateData = {
+        userId: user.id,
+        saleDate: selectedSaleData.date,
+        amount: parseFloat(editAmount),
+        storeName: currentStore.name,
+        businessType: currentStore.businessType
+      }
+
+      const response = await salesAPI.updateSale(selectedSaleData.id, user.id, updateData)
+      
+      if (response.success) {
+        debugLog('매출 수정 성공', response.data)
+        alert('매출이 성공적으로 수정되었습니다.')
+        setIsEditSaleModalOpen(false)
+        // 데이터 새로고침
+        setSalesRefreshTrigger(prev => prev + 1)
+      } else {
+        throw new Error(response.error)
+      }
+    } catch (error) {
+      debugLog('매출 수정 실패', error)
+      alert('매출 수정 중 오류가 발생했습니다: ' + error.message)
+    } finally {
+      setIsEditLoading(false)
+    }
+  }
+
+  const handleDeleteSale = async (saleData) => {
+    if (!confirm(`${saleData.date} 매출 ${saleData.amount.toLocaleString()}원을 삭제하시겠습니까?`)) {
+      return
+    }
+
+    try {
+      const response = await salesAPI.deleteSale(saleData.id, user.id)
+      
+      if (response.success) {
+        debugLog('매출 삭제 성공')
+        alert('매출이 성공적으로 삭제되었습니다.')
+        // 데이터 새로고침
+        setSalesRefreshTrigger(prev => prev + 1)
+      } else {
+        throw new Error(response.error)
+      }
+    } catch (error) {
+      debugLog('매출 삭제 실패', error)
+      alert('매출 삭제 중 오류가 발생했습니다: ' + error.message)
+    }
   }
 
   const handleLogin = async (email, password) => {
@@ -1910,7 +2179,7 @@ export default function Home() {
           
           <TabsContent value="report" className="mt-0">
             <ClientOnly fallback={<div className="h-96 animate-pulse bg-gray-100 rounded-lg"></div>}>
-              <SalesReport user={user} selectedStore={selectedStore} salesRefreshTrigger={salesRefreshTrigger} stores={stores} />
+              <SalesReport user={user} selectedStore={selectedStore} salesRefreshTrigger={salesRefreshTrigger} stores={stores} setSalesRefreshTrigger={setSalesRefreshTrigger} onEditSale={handleEditSale} onDeleteSale={handleDeleteSale} />
             </ClientOnly>
           </TabsContent>
           
@@ -1938,6 +2207,18 @@ export default function Home() {
         onEditStore={handleEditStore}
         currentStore={stores.find(store => store.id === selectedStore)}
       />
+      
+      {/* 매출 수정 모달 */}
+      <EditSaleModal
+        isOpen={isEditSaleModalOpen}
+        onClose={() => setIsEditSaleModalOpen(false)}
+        onUpdate={handleUpdateSale}
+        saleData={selectedSaleData}
+        editAmount={editAmount}
+        setEditAmount={setEditAmount}
+        loading={isEditLoading}
+      />
+      
     </div>
   )
 }

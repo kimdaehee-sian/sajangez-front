@@ -68,6 +68,14 @@ export const salesAPI = {
       method: 'DELETE',
     });
   },
+
+  // 매출 수정
+  updateSale: async (saleId, userId, saleData) => {
+    return await apiCall(`/sales/${saleId}/user/${encodeURIComponent(userId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(saleData),
+    });
+  },
 };
 
 // 사용자 매핑 (데모 사용자 → 실제 DB 사용자)
